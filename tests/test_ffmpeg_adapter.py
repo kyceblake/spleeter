@@ -15,6 +15,7 @@ import numpy as np
 
 # pyright: reportMissingImports=false
 # pylint: disable=import-error
+import pytest
 from pytest import fixture, raises
 
 from spleeter import SpleeterError
@@ -71,9 +72,11 @@ def test_save(adapter, audio_data):
     with TemporaryDirectory() as directory:
         path = join(directory, "ffmpeg-save.mp3")
         adapter.save(path, audio_data[0], audio_data[1])
-        probe = ffmpeg.probe(TEST_AUDIO_DESCRIPTOR)
+        probe = ffmpeg.probe(path)
         assert len(probe["streams"]) == 1
         stream = probe["streams"][0]
         assert stream["codec_type"] == "audio"
         assert stream["channels"] == 2
-        assert stream["duration"] == "10.919184"
+        assert float(stream["duration"]) == pytest.approx(
+            audio_data[0].shape[0] / audio_data[1], abs=1e-3
+        )

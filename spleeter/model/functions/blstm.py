@@ -25,12 +25,12 @@ from typing import Dict, Optional
 # pyright: reportMissingImports=false
 # pylint: disable=import-error
 import tensorflow as tf  # type: ignore
-from tensorflow.compat.v1.keras.initializers import he_uniform  # type: ignore
-from tensorflow.compat.v1.keras.layers import CuDNNLSTM  # type: ignore
+from tensorflow.keras.initializers import HeUniform  # type: ignore
 from tensorflow.keras.layers import (  # type: ignore
     Bidirectional,
     Dense,
     Flatten,
+    LSTM,
     Reshape,
     TimeDistributed,
 )
@@ -65,14 +65,12 @@ def apply_blstm(
     if params is None:
         params = {}
     units: int = params.get("lstm_units", 250)
-    kernel_initializer = he_uniform(seed=50)
+    kernel_initializer = HeUniform(seed=abs(hash(output_name)) % (2**31 - 1))
     flatten_input = TimeDistributed(Flatten())((input_tensor))
 
     def create_bidirectional():
         return Bidirectional(
-            CuDNNLSTM(
-                units, kernel_initializer=kernel_initializer, return_sequences=True
-            )
+            LSTM(units, kernel_initializer=kernel_initializer, return_sequences=True)
         )
 
     l1 = create_bidirectional()((flatten_input))

@@ -17,11 +17,16 @@ Examples:
 """
 
 import hashlib
+import json
 import os
 import tarfile
 from os import environ
 from tempfile import NamedTemporaryFile
 from typing import Dict
+
+# pyright: reportMissingImports=false
+# pylint: disable=import-error
+from importlib import resources
 
 # pyright: reportMissingImports=false
 # pylint: disable=import-error
@@ -112,6 +117,21 @@ class GithubModelProvider(ModelProvider):
             ValueError:
                 If the given model name is not indexed.
         """
+        # Prefer local checksum index for offline usage (and unit tests).
+        try:
+            data = (
+                resources.files("spleeter.resources")
+                .joinpath(self.CHECKSUM_INDEX)
+                .read_text(encoding="utf-8")
+            )
+            index: Dict = json.loads(data)  # type: ignore[assignment]
+        except (FileNotFoundError, ModuleNotFoundError, OSError, json.JSONDecodeError):
+            index = {}
+        if index:
+            if name not in index:
+                raise ValueError(f"No checksum for model {name}")
+            return index[name]
+
         url: str = "/".join(
             (
                 self._host,

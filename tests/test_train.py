@@ -112,7 +112,7 @@ def test_train():
             )
 
             # assert that model checkpoint was created.
-            assert os.path.exists(join(model_dir, "model.ckpt-10.index"))
+            assert os.path.exists(join(model_dir, "ckpt-10.index"))
+            assert os.path.exists(join(model_dir, "ckpt-10.data-00000-of-00001"))
             assert os.path.exists(join(model_dir, "checkpoint"))
-            assert os.path.exists(join(model_dir, "model.ckpt-0.meta"))
             assert result.exit_code == 0

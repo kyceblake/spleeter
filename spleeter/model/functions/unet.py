@@ -19,8 +19,7 @@ from typing import Any, Dict, Iterable, Optional
 # pyright: reportMissingImports=false
 # pylint: disable=import-error
 import tensorflow as tf  # type: ignore
-from tensorflow.compat.v1 import logging  # type: ignore
-from tensorflow.compat.v1.keras.initializers import he_uniform  # type: ignore
+from tensorflow.keras.initializers import HeUniform  # type: ignore
 from tensorflow.keras.layers import (  # type: ignore
     ELU,
     BatchNormalization,
@@ -103,11 +102,11 @@ def apply_unet(
         tf.Tensor:
             Output tensor.
     """
-    logging.info(f"Apply unet for {output_name}")
+    tf.get_logger().info("Apply unet for %s", output_name)
     conv_n_filters = params.get("conv_n_filters", [16, 32, 64, 128, 256, 512])
     conv_activation_layer = _get_conv_activation_layer(params)
     deconv_activation_layer = _get_deconv_activation_layer(params)
-    kernel_initializer = he_uniform(seed=50)
+    kernel_initializer = HeUniform(seed=abs(hash(output_name)) % (2**31 - 1))
     conv2d_factory = partial(
         Conv2D, strides=(2, 2), padding="same", kernel_initializer=kernel_initializer
     )
@@ -134,7 +133,7 @@ def apply_unet(
     # Sixth layer
     conv6 = conv2d_factory(conv_n_filters[5], (5, 5))(rel5)
     batch6 = BatchNormalization(axis=-1)(conv6)
-    _ = conv_activation_layer(batch6)
+    rel6 = conv_activation_layer(batch6)
     #
     #
     conv2d_transpose_factory = partial(
@@ -144,7 +143,7 @@ def apply_unet(
         kernel_initializer=kernel_initializer,
     )
     #
-    up1 = conv2d_transpose_factory(conv_n_filters[4], (5, 5))((conv6))
+    up1 = conv2d_transpose_factory(conv_n_filters[4], (5, 5))((rel6))
     up1 = deconv_activation_layer(up1)
     batch7 = BatchNormalization(axis=-1)(up1)
     drop1 = Dropout(0.5)(batch7)
@@ -172,7 +171,7 @@ def apply_unet(
     batch11 = BatchNormalization(axis=-1)(up5)
     merge5 = Concatenate(axis=-1)([conv1, batch11])
     #
-    up6 = conv2d_transpose_factory(1, (5, 5), strides=(2, 2))((merge5))
+    up6 = conv2d_transpose_factory(1, (5, 5))((merge5))
     up6 = deconv_activation_layer(up6)
     batch12 = BatchNormalization(axis=-1)(up6)
     # Last layer to ensure initial shape reconstruction.
@@ -232,7 +231,10 @@ def softmax_unet(
                 output_mask_logit=True,
             )
         )
-    masks = Softmax(axis=4)(tf.stack(logit_mask_list, axis=4))
+    stacked = tf.keras.layers.Lambda(lambda tensors: tf.stack(tensors, axis=4))(
+        logit_mask_list
+    )
+    masks = Softmax(axis=4)(stacked)
     output_dict = {}
     for i, instrument in enumerate(instruments):
         out_name = f"{instrument}_spectrogram"

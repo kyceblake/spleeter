@@ -73,6 +73,8 @@ For a detailed documentation, please check the [repository wiki](https://github.
 This project is managed using [Poetry](https://python-poetry.org/docs/basic-usage/), to run test suite you
 can execute the following set of commands:
 
+Note: this fork targets TensorFlow 2.20+ (Python 3.10–3.13) and uses Keras APIs (no `tf.estimator`). Training checkpoints are saved as `ckpt-*` in `model_dir`; downloaded legacy TF1 checkpoints are converted on first use.
+
 ```bash
 # Clone spleeter repository
 git clone https://github.com/Deezer/spleeter && cd spleeter

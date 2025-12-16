@@ -12,7 +12,6 @@ Notes:
     leading to large bootstraping time.
 """
 import json
-from functools import partial
 from glob import glob
 from itertools import product
 from os.path import join
@@ -70,38 +69,79 @@ def train(
 
     from .audio.adapter import AudioAdapter
     from .dataset import get_training_dataset, get_validation_dataset
-    from .model import model_fn
+    from .keras.model import build_spectrogram_model
     from .model.provider import ModelProvider
     from .utils.configuration import load_configuration
 
     configure_logger(verbose)
     audio_adapter = AudioAdapter.get(adapter)
     params = load_configuration(params_filename)
-    session_config = tf.compat.v1.ConfigProto()
-    session_config.gpu_options.per_process_gpu_memory_fraction = 0.45
-    estimator = tf.estimator.Estimator(
-        model_fn=model_fn,
-        model_dir=params["model_dir"],
-        params=params,
-        config=tf.estimator.RunConfig(
-            save_checkpoints_steps=params["save_checkpoints_steps"],
-            tf_random_seed=params["random_seed"],
-            save_summary_steps=params["save_summary_steps"],
-            session_config=session_config,
-            log_step_count_steps=10,
-            keep_checkpoint_max=2,
-        ),
+
+    import os
+
+    os.makedirs(params["model_dir"], exist_ok=True)
+    model = build_spectrogram_model(params)
+
+    optimizer_name = params.get("optimizer")
+    learning_rate = float(params.get("learning_rate", 1e-4))
+    if optimizer_name == "Adadelta":
+        optimizer = tf.keras.optimizers.Adadelta(learning_rate=learning_rate)
+    elif optimizer_name == "SGD":
+        optimizer = tf.keras.optimizers.SGD(learning_rate=learning_rate)
+    else:
+        optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
+
+    loss_type = str(params.get("loss_type", "L1_mask"))
+
+    def l1_loss(y_true, y_pred):
+        return tf.reduce_mean(tf.abs(y_pred - y_true))
+
+    def weighted_l1_loss(y_true, y_pred):
+        weights = tf.reduce_mean(y_true, axis=[1, 2, 3], keepdims=True)
+        return tf.reduce_mean(weights * tf.abs(y_pred - y_true))
+
+    if loss_type == "weighted_L1_mask":
+        loss_fn = weighted_l1_loss
+    else:
+        loss_fn = l1_loss
+
+    instruments = list(params["instrument_list"])
+    model.compile(
+        optimizer=optimizer,
+        loss={f"{instrument}_spectrogram": loss_fn for instrument in instruments},
     )
-    input_fn = partial(get_training_dataset, params, audio_adapter, data)
-    train_spec = tf.estimator.TrainSpec(
-        input_fn=input_fn, max_steps=params["train_max_steps"]
-    )
-    input_fn = partial(get_validation_dataset, params, audio_adapter, data)
-    evaluation_spec = tf.estimator.EvalSpec(
-        input_fn=input_fn, steps=None, throttle_secs=params["throttle_secs"]
-    )
+
+    train_dataset = get_training_dataset(params, audio_adapter, data)
+    validation_dataset = get_validation_dataset(params, audio_adapter, data)
+
+    step = tf.Variable(0, dtype=tf.int64, trainable=False, name="global_step")
+    checkpoint = tf.train.Checkpoint(step=step, optimizer=optimizer, model=model)
+    manager = tf.train.CheckpointManager(checkpoint, params["model_dir"], max_to_keep=2)
+    if manager.latest_checkpoint:
+        checkpoint.restore(manager.latest_checkpoint).expect_partial()
+
+    save_steps = int(params.get("save_checkpoints_steps", 100))
+
+    class _StepCheckpointCallback(tf.keras.callbacks.Callback):
+        def on_train_batch_end(self, batch, logs=None):
+            step.assign_add(1)
+            current = int(step.numpy())
+            if current % save_steps == 0:
+                manager.save(checkpoint_number=current)
+
+    max_steps = int(params.get("train_max_steps", 10))
     logger.info("Start model training")
-    tf.estimator.train_and_evaluate(estimator, train_spec, evaluation_spec)
+    model.fit(
+        train_dataset,
+        steps_per_epoch=max_steps,
+        epochs=1,
+        validation_data=validation_dataset,
+        validation_steps=1,
+        callbacks=[_StepCheckpointCallback()],
+        verbose=1 if verbose else 0,
+    )
+
+    manager.save(checkpoint_number=int(step.numpy()))
     ModelProvider.writeProbe(params["model_dir"])
     logger.info("Model training done")
 
@@ -215,6 +255,12 @@ def evaluate(
     Evaluate a model on the musDB test dataset
     """
     import numpy as np
+
+    # Compatibility for third-party packages (e.g., stempeg/musdb) on newer NumPy.
+    if not hasattr(np, "float_"):
+        np.float_ = np.float64  # type: ignore[attr-defined]
+    if not hasattr(np, "complex_"):
+        np.complex_ = np.complex128  # type: ignore[attr-defined]
 
     configure_logger(verbose)
     try:
